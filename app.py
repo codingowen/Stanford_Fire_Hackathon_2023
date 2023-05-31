@@ -1,14 +1,17 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import folium
 import requests
 import streamlit as st
-from streamlit_folium import st_folium
 from google.cloud import firestore
+from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
+from streamlit_folium import st_folium
 
 st.set_page_config(layout="wide")
 st.header("🔥 FireBird - Crowdsourcing Wildfire Detection")
+
 
 @st.cache_resource
 def get_data() -> List[Dict]:
@@ -64,6 +67,29 @@ class Bounds:
         )
 
 
+def convert_firestore_datetime(dt: DatetimeWithNanoseconds) -> datetime:
+    # This will convert a DatetimeWithNanoseconds object to a datetime object,
+    # preserving timezone information
+    dt = datetime(
+        year=dt.year,
+        month=dt.month,
+        day=dt.day,
+        hour=dt.hour,
+        minute=dt.minute,
+        second=dt.second,
+        microsecond=dt.microsecond,
+        tzinfo=dt.tzinfo,
+    )
+
+    dt_truncated = _truncate_microseconds(dt)
+
+    return dt_truncated.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _truncate_microseconds(dt: datetime) -> datetime:
+    return dt.replace(microsecond=0)
+
+
 #############################
 # Streamlit app
 #############################
@@ -78,26 +104,44 @@ geolocations = get_data()
 st.sidebar.header("Map Selection")
 starting_location = st.sidebar.selectbox(
     "Choose a starting location",
-    (["Daly City", "San Francisco", "San Jose", "Los Angeles", "New York", "Chicago", "Houston"]),
+    (
+        [
+            "Daly City",
+            "San Francisco",
+            "San Jose",
+            "Los Angeles",
+            "New York",
+            "Chicago",
+            "Houston",
+        ]
+    ),
 )
 
 # Dictionary mapping location names to their corresponding coordinates
-location_dict = {"Daly City": "37.6879, -122.4702",
-                 "San Francisco": "37.7749, -122.4194",
-                 "San Jose": "37.3382, -121.8863",
-                 "Los Angeles": "34.0522, -118.2437",
-                 "New York": "40.7128, -74.0060",
-                 "Chicago": "41.8781, -87.6298",
-                 "Houston": "29.7604, -95.3698"}
+location_dict = {
+    "Daly City": "37.6879, -122.4702",
+    "San Francisco": "37.7749, -122.4194",
+    "San Jose": "37.3382, -121.8863",
+    "Los Angeles": "34.0522, -118.2437",
+    "New York": "40.7128, -74.0060",
+    "Chicago": "41.8781, -87.6298",
+    "Houston": "29.7604, -95.3698",
+}
 
 selected_location = location_dict[starting_location]
 
-map_type = st.sidebar.selectbox("Select Map Type", ["Open Street Map", "Terrain", "Toner"])
-map_dict = {"Open Street Map": "OpenStreetMap", "Terrain": "Stamen Terrain", "Toner": "Stamen Toner"}
+map_type = st.sidebar.selectbox(
+    "Select Map Type", ["Open Street Map", "Terrain", "Toner"]
+)
+map_dict = {
+    "Open Street Map": "OpenStreetMap",
+    "Terrain": "Stamen Terrain",
+    "Toner": "Stamen Toner",
+}
 selected_map = map_dict[map_type]
 
 # Get latitude and longitude from selected location
-location = list(map(float, selected_location.split(',')))
+location = list(map(float, selected_location.split(",")))
 
 tab1, tab2, tab3 = st.tabs(["__Sightings__", "__Details__", "__Triage Centre__"])
 
@@ -113,9 +157,12 @@ with tab1:
         for geolocation in geolocations:
             popup = folium.Popup(
                 f"""
-                                <strong>Coordinates:</strong> {geolocation['latitude']}, {geolocation['longitude']}<br>
+                <strong>Coordinates:</strong> <code>({round(geolocation['latitude'], 5)}, {round(geolocation['longitude'], 5)})</code><br>
+                <strong>Time:</strong> {convert_firestore_datetime(geolocation['datetime'])}<br>
+                <strong>Details:</strong> See more in details tab<br>
                                 """,
-                max_width=250)
+                max_width=250,
+            )
             folium.Marker(
                 [geolocation["latitude"], geolocation["longitude"]], popup=popup
             ).add_to(m)
@@ -141,14 +188,14 @@ except TypeError:
 
 # Checkbox widget to show/hide technical details
 with tab1:
-    if st.checkbox('Show technical details'):
+    if st.checkbox("Show technical details"):
         geolocations_in_view: List[Dict] = []
         for geolocation in geolocations:
             if map_bounds.contains_point(geolocation["_point"]):
                 geolocations_in_view.append(geolocation)
 
         st.markdown("###### Fire Sightings Within View")
-        st.code(f"{len(geolocations_in_view)}", language='python')
+        st.code(f"{len(geolocations_in_view)}", language="python")
 
         st.markdown("###### Map Bounding Box")
-        st.code(f"{map_bounds}", language='python')
+        st.code(f"{map_bounds}", language="python")
