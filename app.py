@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import folium
-import requests
 import streamlit as st
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
@@ -62,9 +61,7 @@ class Bounds:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Bounds":
-        return cls(
-            Point.from_dict(data["_southWest"]), Point.from_dict(data["_northEast"])
-        )
+        return cls(Point.from_dict(data["_southWest"]), Point.from_dict(data["_northEast"]))
 
 
 def convert_firestore_datetime(dt: DatetimeWithNanoseconds) -> datetime:
@@ -130,9 +127,7 @@ location_dict = {
 
 selected_location = location_dict[starting_location]
 
-map_type = st.sidebar.selectbox(
-    "Select Map Type", ["Open Street Map", "Terrain", "Toner"]
-)
+map_type = st.sidebar.selectbox("Select Map Type", ["Open Street Map", "Terrain", "Toner"])
 map_dict = {
     "Open Street Map": "OpenStreetMap",
     "Terrain": "Stamen Terrain",
@@ -163,9 +158,7 @@ with tab1:
                                 """,
                 max_width=250,
             )
-            folium.Marker(
-                [geolocation["latitude"], geolocation["longitude"]], popup=popup
-            ).add_to(m)
+            folium.Marker([geolocation["latitude"], geolocation["longitude"]], popup=popup).add_to(m)
 
         map_data = st_folium(m, key="fig1", width=1400, height=500)
 
