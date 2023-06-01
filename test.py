@@ -1,16 +1,21 @@
-import folium
-from math import sin, cos, atan2, radians
-from shapely.geometry import Point, LineString
+
+from shapely.geometry import LineString, Point
 from sklearn.cluster import DBSCAN
 from scipy.spatial import distance
-from shapely.ops import split
+import numpy as np
 
-# GPS Datapoints
-origin_coordinates = [(34.0522, -118.2437), (37.7749, -122.4194), (32.7157, -117.1611)]
 
-# Direction Vectors
-directions = [(0,1), (0,1), (0,1)]
 
+# origin_coordinates refers to the GPS coordinates of the person submitting the photo. It should be a list of (x,y) tuples.
+origin_coordinates = [(39.810278, -121.7), (39.89, -121.5), (39.77, -121.1)]
+
+# directions refers to the direction vector for the phone when the photo was taken. It should be a list of (x,y) tuples.
+directions = [(0,100), (-100,100), (100,-100)]
+
+# origin_coordinates and directions should have corresponding (x,y) tuples of the same index.
+
+
+#calculate_intersection takes in the (x,y) origin points and directions of two lines, representing two people.
 def calculate_intersection(coordinate1, direction1, coordinate2, direction2):
     line1 = LineString([coordinate1, (coordinate1[0] + direction1[0], coordinate1[1] + direction1[1])])
     line2 = LineString([coordinate2, (coordinate2[0] + direction2[0], coordinate2[1] + direction2[1])])
@@ -23,24 +28,37 @@ def calculate_intersection(coordinate1, direction1, coordinate2, direction2):
         return intersection
     else:
         return None
+# The above logic only registers a successful intersection if there is only 1 intersection point between the two lines.
+# It ignores edge cases, like if two people are facing each other perfectly and their direction vectors are parallel + intersecting.
 
 
 intersection_points = []
+origin_vectors_for_intersection_points = []
 
+
+
+# the loop below ensures that all successful intersections are recorded in the intersection_points variable, and the corresponding origin_coordinates are recorded with the same index as well.
 for i in range(len(origin_coordinates)):
     for j in range(i + 1, len(origin_coordinates)):
         intersection = calculate_intersection(origin_coordinates[i], directions[i], origin_coordinates[j], directions[j])
         if intersection:
                 intersection_points.append(intersection)
+                origin_vectors_for_intersection_points.append((origin_coordinates[i],directions[i], origin_coordinates[j], directions[j]))
 
 
+
+# Non_Shapely_intersection_points essentially converts the list of (x,y) intersection points
+# into a numpy array for compatibility with the sklearn methods
 Non_Shapely_intersection_points = []
+
 
 for i in intersection_points:
     Non_Shapely_intersection_points.append([i.x, i.y])
+Non_Shapely_intersection_points = np.array(Non_Shapely_intersection_points)
 
+
+# Calculate average pairwise distance within the cluster
 def calculate_clustering_coefficient(cluster):
-    #Calculate average pairwise distance within the cluster
     pairwise_distances = distance.pdist(cluster)
     avg_pairwise_distance = pairwise_distances.mean()
     return avg_pairwise_distance
@@ -60,19 +78,33 @@ def find_subset_with_highest_clustering_coefficient(coordinates):
         cluster = feature_matrix[labels == label]
         clustering_coefficients[label] = calculate_clustering_coefficient(cluster)
 
-    # Select the subset with the highest clustering coefficient
-    highest_coefficient_label = max(clustering_coefficients, key=clustering_coefficients.get)
+    # Select the subset with the highest clustering coefficient. GPT wrote max(...) but I changed it to min(...), because logic. I might be wrong.
+    highest_coefficient_label = min(clustering_coefficients, key=clustering_coefficients.get)
     subset = feature_matrix[labels == highest_coefficient_label]
 
-    return subset  #IM NOT SURE RIGHT NOW BUT IM ASSUMING THAT THIS SUBSET VARIABLE RETURNS A LIST OF [X,Y] COORDINATES.
-############################################################
+    return subset
 
+# optimized_intersection_points will be a list of (x,y) intersection points that provide best clustering coefficient
 optimized_intersection_points = find_subset_with_highest_clustering_coefficient(Non_Shapely_intersection_points)
+
+# this is a list of all (x,y) origin vectors that contributed to finding the "optimized intersection points"
+optimized_origin_vectors_for_intersection_points = []
+
+
+# this finds the index j, by finding which index of the total intersection point list, the optimized intersection points correspond to
+# by finding j, we can identify the origin vectors that contributed to the final optimized intersection points
+for i in optimized_intersection_points:
+    for j in range(len(intersection_points)):
+        Point_optimized_intersection_points = Point(optimized_intersection_points[j])  # converts to a shapely point
+        if Point_optimized_intersection_points == intersection_points[j]:
+            optimized_origin_vectors_for_intersection_points.append(origin_vectors_for_intersection_points[j])
 
 sum_x = 0
 sum_y = 0
 total_points = 0
 
+
+# the following loop helps find average x and y values of the finalized list of coordinates.
 for coord in optimized_intersection_points:
     sum_x += coord[0]
     sum_y += coord[1]
@@ -83,66 +115,10 @@ center_y = sum_y / total_points
 
 fire_coord = [center_x, center_y]
 
+# the following two variables are the key outputs. Firstly, the (x,y) coordinate of the fire, as well as the
+# the finalized set of origin vectors that contributed to finding the optimized intersection points. For plotting purposes.
 print(fire_coord)
-
-################################################################
-#ALL CODE BELOW IS FOR INTEGRATION WITHIN THE PYTHON SCRIPT TO FOLIUM. IT ALSO HAS LEGACY LOGIC WHICH IS NO LONGER GOOD. IGNORE THAT.
-#PLEASE DON'T DELETE THE CODE. I WILL IMPROVE THIS TOMORROW AND MAKE SURE THAT IT WORKS.
-'''
+print(optimized_origin_vectors_for_intersection_points)
 
 
-# Create a map centered on California
-m = folium.Map(location=[36.7783, -119.4179], zoom_start=6)
 
-# Plot GPS points with bearings
-for i, (lat, lon) in enumerate(gps_data):
-    # Convert bearing to radians
-    bearing_rad = radians(bearings[i])
-
-    # Calculate destination point using bearing and distance
-    distance = 100  # Arbitrary distance for visualization
-
-    # Calculate latitude and longitude of destination point
-    lat_dest = lat + (distance / 111.32) * sin(bearing_rad)
-    lon_dest = lon + (distance / (111.32 * cos(radians(lat)))) * cos(bearing_rad)
-
-    # Plot GPS point
-    folium.CircleMarker(location=[lat, lon], radius=5, color='red', fill=True, fill_color='red').add_to(m)
-
-    # Plot bearing line
-    folium.PolyLine(locations=[(lat, lon), (lat_dest, lon_dest)], color='blue').add_to(m)
-
-# Find intersection point
-intersection_lat, intersection_lon = gps_data[0]
-
-for i in range(1, len(gps_data)):
-    lat1, lon1 = intersection_lat, intersection_lon
-    lat2, lon2 = gps_data[i]
-
-    bearing_rad = radians(bearings[i])
-    distance = 100  # Arbitrary distance for intersection calculation
-
-    # Calculate destination point using bearing and distance
-    lat_dest = lat2 + (distance / 111.32) * sin(bearing_rad)
-    lon_dest = lon2 + (distance / (111.32 * cos(radians(lat2)))) * cos(bearing_rad)
-
-    # Calculate intersection point
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    x = lon_dest - lon1
-    y = lat_dest - lat1
-
-    cross_product = (dlat * y) - (dlon * x)
-    t = ((lat1 - lat2) * x - (lon1 - lon2) * y) / cross_product
-
-    intersection_lat = lat1 + dlat * t
-    intersection_lon = lon1 + dlon * t
-
-# Plot intersection point
-folium.CircleMarker(location=[intersection_lat, intersection_lon], radius=5, color='green', fill=True,
-                    fill_color='green').add_to(m)
-
-# Save the map to an HTML file
-m.save('map.html')
-
-'''
