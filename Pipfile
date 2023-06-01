@@ -7,6 +7,12 @@ name = "pypi"
 streamlit = "*"
 folium = "*"
 streamlit-folium = "*"
+google-cloud-bigquery = "*"
+grpcio = "*"
+google-cloud-firestore = "*"
+black = "*"
+isort = "*"
+pre-commit = "*"
 
 [dev-packages]
 

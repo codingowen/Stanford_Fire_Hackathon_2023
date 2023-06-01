@@ -1,26 +1,31 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import folium
-import requests
 import streamlit as st
+from google.cloud import firestore
+from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
 from streamlit_folium import st_folium
 
 st.set_page_config(layout="wide")
+st.header("🔥 FireBird - Crowdsourcing Wildfire Detection")
 
 
 @st.cache_resource
 def get_data() -> List[Dict]:
-    api_key = st.secrets["api_key"]
-    url = f"https://developer.nps.gov/api/v1/parks?api_key={api_key}&limit=500"
-    resp = requests.get(url)
-    data = resp.json()["data"]
-    parks = [park for park in data if park["designation"] == "National Park"]
+    # Authenticate to Firestore with the JSON account key.
+    db = firestore.Client.from_service_account_json("firestore-key.json")
 
-    for park in parks:
-        park["_point"] = Point.from_dict(park)
+    # Create a reference to the Google post.
+    docs = db.collection("1").stream()
 
-    return parks
+    geolocations = [geolocation.to_dict() for geolocation in docs]
+
+    for geolocation in geolocations:
+        geolocation["_point"] = Point.from_dict(geolocation)
+
+    return geolocations
 
 
 @dataclass
@@ -56,50 +61,106 @@ class Bounds:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Bounds":
-        return cls(
-            Point.from_dict(data["_southWest"]), Point.from_dict(data["_northEast"])
-        )
+        return cls(Point.from_dict(data["_southWest"]), Point.from_dict(data["_northEast"]))
+
+
+def convert_firestore_datetime(dt: DatetimeWithNanoseconds) -> datetime:
+    # This will convert a DatetimeWithNanoseconds object to a datetime object,
+    # preserving timezone information
+    dt = datetime(
+        year=dt.year,
+        month=dt.month,
+        day=dt.day,
+        hour=dt.hour,
+        minute=dt.minute,
+        second=dt.second,
+        microsecond=dt.microsecond,
+        tzinfo=dt.tzinfo,
+    )
+
+    dt_truncated = _truncate_microseconds(dt)
+
+    return dt_truncated.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _truncate_microseconds(dt: datetime) -> datetime:
+    return dt.replace(microsecond=0)
 
 
 #############################
 # Streamlit app
 #############################
 
-"## National Parks in the United States"
-
-"""
-The National Parks Service provides an [API](https://www.nps.gov/subjects/digital/nps-data-api.htm) to programmatically explore NPS data. 
-
-We can take data about each park and display it on the map _conditionally_ based on whether it is in the viewport. 
-
----
-"""
-
 # define layout
 c1, c2 = st.columns(2)
 
 # get and cache data from API
-parks = get_data()
+geolocations = get_data()
+
+# Sidebar
+st.sidebar.header("Map Selection")
+starting_location = st.sidebar.selectbox(
+    "Choose a starting location",
+    (
+        [
+            "Daly City",
+            "San Francisco",
+            "San Jose",
+            "Los Angeles",
+            "New York",
+            "Chicago",
+            "Houston",
+        ]
+    ),
+)
+
+# Dictionary mapping location names to their corresponding coordinates
+location_dict = {
+    "Daly City": "37.6879, -122.4702",
+    "San Francisco": "37.7749, -122.4194",
+    "San Jose": "37.3382, -121.8863",
+    "Los Angeles": "34.0522, -118.2437",
+    "New York": "40.7128, -74.0060",
+    "Chicago": "41.8781, -87.6298",
+    "Houston": "29.7604, -95.3698",
+}
+
+selected_location = location_dict[starting_location]
+
+map_type = st.sidebar.selectbox("Select Map Type", ["Open Street Map", "Terrain", "Toner"])
+map_dict = {
+    "Open Street Map": "OpenStreetMap",
+    "Terrain": "Stamen Terrain",
+    "Toner": "Stamen Toner",
+}
+selected_map = map_dict[map_type]
+
+# Get latitude and longitude from selected location
+location = list(map(float, selected_location.split(",")))
+
+tab1, tab2, tab3 = st.tabs(["__Sightings__", "__Details__", "__Triage Centre__"])
 
 # layout map
-with c1:
-    """(_Click on a pin to bring up more information_)"""
-    m = folium.Map(location=[39.7388, -121.8500], zoom_start=100)
+with tab1:
+    with st.expander("__Map__", expanded=True):
+        # get and cache data from API
+        geolocations = get_data()
 
-    for park in parks:
-        popup = folium.Popup(f"""
-                  <a href="{park["url"]}" target="_blank">{park["fullName"]}</a><br>
-                  <br>
-                  {park["operatingHours"][0]["description"]}<br>
-                  <br>
-                  Phone: {park["contacts"]["phoneNumbers"][0]["phoneNumber"]}<br>
-                  """,
-                             max_width=250)
-        folium.Marker(
-            [park["latitude"], park["longitude"]], popup=popup
-        ).add_to(m)
+        # layout map
+        m = folium.Map(location=location, zoom_start=10)
 
-    map_data = st_folium(m, key="fig1", width=700, height=700)
+        for geolocation in geolocations:
+            popup = folium.Popup(
+                f"""
+                <strong>Coordinates:</strong> <code>({round(geolocation['latitude'], 5)}, {round(geolocation['longitude'], 5)})</code><br>
+                <strong>Time:</strong> {convert_firestore_datetime(geolocation['datetime'])}<br>
+                <strong>Details:</strong> See more in details tab<br>
+                                """,
+                max_width=250,
+            )
+            folium.Marker([geolocation["latitude"], geolocation["longitude"]], popup=popup).add_to(m)
+
+        map_data = st_folium(m, key="fig1", width=1400, height=500)
 
 # get data from map for further processing
 map_bounds = Bounds.from_dict(map_data["bounds"])
@@ -109,24 +170,25 @@ try:
     point_clicked: Optional[Point] = Point.from_dict(map_data["last_object_clicked"])
 
     if point_clicked is not None:
-        with st.spinner(text="loading image..."):
-            for park in parks:
-                if park["_point"].is_close_to(point_clicked):
-                    with c2:
-                        f"""### _{park["fullName"]}_"""
-                        park["description"]
-                        st.image(park["images"][0]["url"], caption=park["images"][0]["caption"])
-                        st.expander("Show park full details").write(park)
+        with st.spinner(text="Loading fire data..."):
+            for geolocation in geolocations:
+                if geolocation["_point"].is_close_to(point_clicked):
+                    with tab2:
+                        st.subheader("Sighting Details")
+                        st.json(geolocation)
 except TypeError:
     point_clicked = None
 
-# even though there is a c1 reference above, we can do it again
-# output will get appended after original content
-with c1:
-    parks_in_view: List[Dict] = []
-    for park in parks:
-        if map_bounds.contains_point(park["_point"]):
-            parks_in_view.append(park)
+# Checkbox widget to show/hide technical details
+with tab1:
+    if st.checkbox("Show technical details"):
+        geolocations_in_view: List[Dict] = []
+        for geolocation in geolocations:
+            if map_bounds.contains_point(geolocation["_point"]):
+                geolocations_in_view.append(geolocation)
 
-    "Parks visible:", len(parks_in_view)
-    "Bounding box:", map_bounds
+        st.markdown("###### Fire Sightings Within View")
+        st.code(f"{len(geolocations_in_view)}", language="python")
+
+        st.markdown("###### Map Bounding Box")
+        st.code(f"{map_bounds}", language="python")
