@@ -13,8 +13,16 @@ google-cloud-firestore = "*"
 black = "*"
 isort = "*"
 pre-commit = "*"
+shapely = "*"
+sklearn = "*"
+scipy = "*"
+numpy = "*"
+scikit-learn = "*"
+wheel = "*"
+geographiclib = "*"
+pytest = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.9.13"
+python_version = "3.11.3"

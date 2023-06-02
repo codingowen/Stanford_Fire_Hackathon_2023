@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import folium
 import streamlit as st
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
 from streamlit_folium import st_folium
+
+import algo
 
 st.set_page_config(layout="wide")
 st.header("🔥 FireBird - Crowdsourcing Wildfire Detection")
@@ -124,7 +126,6 @@ location_dict = {
     "Chicago": "41.8781, -87.6298",
     "Houston": "29.7604, -95.3698",
 }
-
 selected_location = location_dict[starting_location]
 
 map_type = st.sidebar.selectbox("Select Map Type", ["Open Street Map", "Terrain", "Toner"])
@@ -135,8 +136,16 @@ map_dict = {
 }
 selected_map = map_dict[map_type]
 
+with st.sidebar:
+    if st.button("Refresh"):
+        st.cache_resource.clear()
+        st.experimental_rerun()
+
 # Get latitude and longitude from selected location
 location = list(map(float, selected_location.split(",")))
+
+# Add this in the sidebar
+localize_wildfire = st.sidebar.checkbox("Localize Wildfire")
 
 tab1, tab2, tab3 = st.tabs(["__Sightings__", "__Details__", "__Triage Centre__"])
 
@@ -147,7 +156,9 @@ with tab1:
         geolocations = get_data()
 
         # layout map
-        m = folium.Map(location=location, zoom_start=10)
+        m = folium.Map(location=location, zoom_start=10, tiles=selected_map)
+
+        points = []  # list to store coordinates for polyline
 
         for geolocation in geolocations:
             popup = folium.Popup(
@@ -160,10 +171,24 @@ with tab1:
             )
             folium.Marker([geolocation["latitude"], geolocation["longitude"]], popup=popup).add_to(m)
 
+            # add coordinates to points list
+            points.append((geolocation["latitude"], geolocation["longitude"]))
+
         map_data = st_folium(m, key="fig1", width=1400, height=500)
 
-# get data from map for further processing
-map_bounds = Bounds.from_dict(map_data["bounds"])
+        # get data from map for further processing
+        map_bounds = Bounds.from_dict(map_data["bounds"])
+
+        # add polyline to the map if checkbox is checked
+        if localize_wildfire:
+            # Then, inside your tab1, add the following lines after the points loop:
+            try:
+                fire_coord = algo.get_fire_coordinates(geolocations, map_bounds)
+            except TypeError:
+                fire_coord = None
+
+            if not fire_coord:
+                st.error("🔥 Not enough coordinates or direction vectors on map.")
 
 # when a point is clicked, display additional information about the park
 try:
